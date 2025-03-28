@@ -1,8 +1,10 @@
-
-name: Launch EC2 with Monitoring Stack
+name: Launch EC2 with Minikube
 
 on:
-  workflow_dispatch:  # Manually trigger workflow
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   launch-instance:
@@ -12,6 +14,16 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Debug - Check Files in Runner
+        run: ls -l
+
+      - name: Debug - Check if user-data.sh Exists
+        run: |
+          if [ ! -f user-data.sh ]; then
+            echo "Error: user-data.sh NOT FOUND!"
+            exit 1
+          fi
+
       - name: Configure AWS CLI
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -19,15 +31,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Launch EC2 Instance with User Data Script
+      - name: Launch EC2 with User Data
         run: |
           aws ec2 run-instances \
             --image-id ami-084568db4383264d4 \
             --instance-type t3.micro \
             --key-name macbook \
             --security-groups default \
-            --user-data file://user-data.sh \
+            --user-data file://$(pwd)/user-data.sh \
             --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=MonitoringInstance}]'
-
-  - name: Debug file existence
-    run: ls -l || echo "user-data.sh NOT FOUND"
