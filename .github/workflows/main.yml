@@ -1,42 +1,61 @@
-name: Launch EC2 with Minikube
+provider "aws" {
+  region = "us-east-1"  # Change this to your preferred AWS region
+}
 
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+resource "aws_instance" "grafana_server1" {
+  ami           = "ami-084568db4383264d4"
+  instance_type = "t3.micro"
+  key_name      = "macbook"
+  security_groups = ["default"]
 
-jobs:
-  launch-instance:
-    runs-on: ubuntu-latest
+  user_data = <<-EOF
+    #!/bin/bash
+    sudo apt update -y
+    sudo apt install -y docker.io nginx curl
 
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    # Start and enable Docker
+    sudo systemctl start docker
+    sudo systemctl enable docker
 
-      - name: Debug - Check Files in Runner
-        run: ls -l
+    # Run Prometheus
+    sudo mkdir -p /opt/prometheus
+    sudo tee /opt/prometheus/prometheus.yml > /dev/null <<EOL
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: 'node_exporter'
+        static_configs:
+          - targets: ['localhost:9100']
+    EOL
+    sudo docker run -d --name prometheus -p 9090:9090 -v /opt/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
 
-      - name: Debug - Check if user-data.sh Exists
-        run: |
-          if [ ! -f user-data.sh ]; then
-            echo "Error: user-data.sh NOT FOUND!"
-            exit 1
-          fi
+    # Run Node Exporter
+    sudo docker run -d --name node_exporter -p 9100:9100 prom/node-exporter
 
-      - name: Configure AWS CLI
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+    # Run Grafana
+    sudo docker run -d --name grafana -p 3000:3000 grafana/grafana
 
-      - name: Launch EC2 with User Data
-        run: |
-          aws ec2 run-instances \
-            --image-id ami-084568db4383264d4 \
-            --instance-type t3.micro \
-            --key-name macbook \
-            --security-groups default \
-            --user-data file://$(pwd)/user-data.sh \
-            --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=MonitoringInstance}]'
+    # Configure Nginx Reverse Proxy
+    sudo tee /etc/nginx/sites-available/grafana > /dev/null <<EOL
+    server {
+        listen 80;
+        server_name _;
+
+        location / {
+            proxy_pass http://localhost:3000/;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }
+    }
+    EOL
+
+    sudo ln -s /etc/nginx/sites-available/grafana /etc/nginx/sites-enabled/
+    sudo systemctl restart nginx
+  EOF
+
+  tags = {
+    Name = "AMAN-Grafana-Server"
+  }
+}
